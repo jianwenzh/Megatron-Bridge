@@ -30,6 +30,7 @@ from megatron.bridge.data.vlm_datasets.hf_dataset_makers import (
     make_medpix_dataset,
     make_raven_dataset,
     make_rdr_dataset,
+    make_zipmix_dataset
 )
 from megatron.bridge.models.hf_pretrained.utils import is_safe_repo
 from megatron.bridge.training.config import DatasetBuildContext, DatasetProvider
@@ -56,10 +57,14 @@ class HFDatasetConversationProvider(DatasetProvider):
     maker_name: str
 
     # Optional parameters forwarded to the selected maker
+    # For make_jsonl_zip_chatml_datamix, the maker_kwargs can be:
+    # - datamix_config_path: str (path to datamix config YAML that specifies multiple datasets and sampling rates)
     maker_kwargs: Optional[Dict[str, Any]] = None
 
     # Optional collate override. If None, inferred from processor type.
     collate_impl: Optional[Callable[[list, Any], Dict[str, torch.Tensor]]] = None
+
+    collate_kwargs: Optional[Dict[str, Any]] = None  # Optional kwargs forwarded to collate function, e.g., min_pixels, max_pixels for Qwen3-VL
 
     # Keep parity with GPTDatasetConfig usage in batching utilities
     skip_getting_attention_mask_from_dataset: bool = True
@@ -70,6 +75,13 @@ class HFDatasetConversationProvider(DatasetProvider):
     # Enable batch-level online sequence packing (dataset-level packing is available in FinetuneDatasetProvider)
     pack_sequences_in_batch: bool = False
 
+    def __post_init__(self):
+        # parse maker_kwargs and collate_kwargs, str "arg1=argv1 arg2=argv2" -> {"arg1": argv1, "arg2": argv2}
+        if self.maker_kwargs is not None:
+            self.maker_kwargs = {k: v for k, v in (item.split("=") for item in self.maker_kwargs.split())}
+        if self.collate_kwargs is not None:
+            self.collate_kwargs = {k: v for k, v in (item.split("=") for item in self.collate_kwargs.split())}
+
     def _get_maker(self) -> Callable[..., List[Dict[str, Any]]]:
         registry: Dict[str, Callable[..., List[Dict[str, Any]]]] = {
             "make_rdr_dataset": make_rdr_dataset,
@@ -78,6 +90,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             "make_cv17_dataset": make_cv17_dataset,
             "make_raven_dataset": make_raven_dataset,
             "make_llava_video_178k_dataset": make_llava_video_178k_dataset,
+            "make_zipmix_dataset": make_zipmix_dataset,
         }
         if self.maker_name in registry:
             return registry[self.maker_name]
@@ -89,6 +102,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             "cv17": "make_cv17_dataset",
             "raven": "make_raven_dataset",
             "llava_video_178k": "make_llava_video_178k_dataset",
+            "zipmix": "make_zipmix_dataset",
         }
         if self.maker_name in alias_map and alias_map[self.maker_name] in registry:
             return registry[alias_map[self.maker_name]]
@@ -113,6 +127,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             target_length=target_length,
             processor=processor,
             collate_impl=self.collate_impl,
+            **(self.collate_kwargs or {}),
         )
 
     def build_datasets(self, context: DatasetBuildContext) -> Tuple[Optional[Any], Optional[Any], Optional[Any]]:
