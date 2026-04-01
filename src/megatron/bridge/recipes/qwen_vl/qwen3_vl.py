@@ -57,7 +57,7 @@ def _make_energon_dataset(
 # =============================================================================
 # Qwen3-VL 8B SFT Configuration
 # =============================================================================
-def qwen3_vl_8b_sft_config() -> ConfigContainer:
+def qwen3_vl_8b_sft_config(hf_path: str= "Qwen/Qwen3-VL-8B-Instruct") -> ConfigContainer:
     """Return a full SFT config for Qwen3-VL 8B (dense model).
 
     Default configuration: 1 node, 8 GPUs
@@ -68,7 +68,7 @@ def qwen3_vl_8b_sft_config() -> ConfigContainer:
     cfg = _sft_common_vlm()
 
     # Model configuration
-    hf_path = "Qwen/Qwen3-VL-8B-Instruct"
+    # hf_path = "Qwen/Qwen3-VL-8B-Instruct"
     cfg.model = AutoBridge.from_hf_pretrained(hf_path).to_megatron_provider(load_weights=False)
     cfg.model.seq_length = 4096
 
@@ -464,7 +464,7 @@ def qwen3_vl_235b_a22b_sft_config() -> ConfigContainer:
 # =============================================================================
 # Qwen3-VL 8B PEFT Configuration
 # =============================================================================
-def qwen3_vl_8b_peft_config(peft_scheme: str | PEFT = "lora") -> ConfigContainer:
+def qwen3_vl_8b_peft_config(peft_scheme: str | PEFT = "lora", hf_path: str = "Qwen/Qwen3-VL-8B-Instruct") -> ConfigContainer:
     """Return a PEFT config for Qwen3-VL 8B (dense model).
 
     Default configuration: 1 node, 8 GPUs
@@ -484,7 +484,7 @@ def qwen3_vl_8b_peft_config(peft_scheme: str | PEFT = "lora") -> ConfigContainer
         cfg.peft = peft_scheme
 
     # Model configuration
-    hf_path = "Qwen/Qwen3-VL-8B-Instruct"
+    # hf_path = "Qwen/Qwen3-VL-8B-Instruct"
     cfg.model = AutoBridge.from_hf_pretrained(hf_path).to_megatron_provider(load_weights=False)
     cfg.model.seq_length = 4096
 
