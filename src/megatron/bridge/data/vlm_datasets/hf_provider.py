@@ -59,12 +59,17 @@ class HFDatasetConversationProvider(DatasetProvider):
     # Optional parameters forwarded to the selected maker
     # For make_jsonl_zip_chatml_datamix, the maker_kwargs can be:
     # - datamix_config_path: str (path to datamix config YAML that specifies multiple datasets and sampling rates)
+    # Pass in via cli following hydra-like syntax: e.g., dataset.maker_kwargs='{datamix_config_path:"/path/to/config.yaml"}', note the quotes
+    # For normal existing hf dataset makers, the maker_kwargs can be used to pass in local data path:
+    # - path_or_dataset: str (path to local dataset or HF dataset identifier)
+    # dataset.maker_kwargs='{path_or_dataset:"/path/to/dataset_local_path"}'
     maker_kwargs: Optional[Dict[str, Any]] = None
 
     # Optional collate override. If None, inferred from processor type.
     collate_impl: Optional[Callable[[list, Any], Dict[str, torch.Tensor]]] = None
-
-    collate_kwargs: Optional[Dict[str, Any]] = None  # Optional kwargs forwarded to collate function, e.g., min_pixels, max_pixels for Qwen3-VL
+    # Optional parameters forwarded to collate function, e.g., for dynamic image resizing in Qwen3-VL, min_pixels and max_pixels via collate_kwargs: 
+    # Pass in via cli hydra-like syntax: e.g., dataset.collate_kwargs='{min_pixels:512, max_pixels:1024}', note the quotes
+    collate_kwargs: Optional[Dict[str, Any]] = None
 
     # Keep parity with GPTDatasetConfig usage in batching utilities
     skip_getting_attention_mask_from_dataset: bool = True
@@ -74,13 +79,6 @@ class HFDatasetConversationProvider(DatasetProvider):
 
     # Enable batch-level online sequence packing (dataset-level packing is available in FinetuneDatasetProvider)
     pack_sequences_in_batch: bool = False
-
-    def __post_init__(self):
-        # parse maker_kwargs and collate_kwargs, str "arg1=argv1 arg2=argv2" -> {"arg1": argv1, "arg2": argv2}
-        if self.maker_kwargs is not None:
-            self.maker_kwargs = {k: v for k, v in (item.split("=") for item in self.maker_kwargs.split())}
-        if self.collate_kwargs is not None:
-            self.collate_kwargs = {k: v for k, v in (item.split("=") for item in self.collate_kwargs.split())}
 
     def _get_maker(self) -> Callable[..., List[Dict[str, Any]]]:
         registry: Dict[str, Callable[..., List[Dict[str, Any]]]] = {
