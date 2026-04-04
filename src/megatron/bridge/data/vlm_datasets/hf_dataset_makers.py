@@ -27,7 +27,6 @@ from datasets import concatenate_datasets, load_dataset
 from megatron.bridge.data.vlm_datasets.token_utils import json2token
 from megatron.bridge.utils.common_utils import resolve_path
 
-
 def make_rdr_dataset(
     path_or_dataset: str = "quintend/rdr-items", split: str = "train", **kwargs
 ) -> List[Dict[str, Any]]:
@@ -89,6 +88,51 @@ def make_cord_v2_dataset(
 
     return [format(example) for example in dataset]
 
+# random pack var num of examples into a pack
+def make_cord_v2_mocked_pack_dataset(
+    path_or_dataset: str = "naver-clova-ix/cord-v2", split: str = "train", **kwargs
+) -> List[Dict[str, Any]]:
+    """Load and preprocess the CORD-V2 dataset for image-to-text fine-tuning."""
+    dataset = load_dataset(path_or_dataset, split=split)
+
+    def format(example):
+        ground_truth = json.loads(example["ground_truth"])
+        if "gt_parses" in ground_truth:
+            assert isinstance(ground_truth["gt_parses"], list)
+            gt_jsons = ground_truth["gt_parses"]
+        else:
+            assert "gt_parse" in ground_truth and isinstance(ground_truth["gt_parse"], dict)
+            gt_jsons = [ground_truth["gt_parse"]]
+
+        text = random.choice([json2token(gt_json, sort_json_key=True) for gt_json in gt_jsons])
+
+        return {
+            "conversation": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": example["image"]},
+                        {"type": "text", "text": "Describe this image."},
+                    ],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": text}]},
+            ],
+        }
+
+    orig_examples = [format(example) for example in dataset]
+    packs = [[]]
+    max_pack_size = 3
+    current_pack_size = random.randint(1, max_pack_size)
+    for example in orig_examples:
+        current_pack = packs[-1]
+        if len(current_pack) >= current_pack_size:
+            packs.append([])
+            current_pack_size = random.randint(1, max_pack_size)
+            current_pack = packs[-1]
+        
+        current_pack.append(example)
+        
+    return packs
 
 def make_medpix_dataset(
     path_or_dataset: str = "mmoukouba/MedPix-VQA", split: str = "train", **kwargs

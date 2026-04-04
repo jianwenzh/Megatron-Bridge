@@ -25,6 +25,7 @@ from transformers import AutoProcessor
 from megatron.bridge.data.vlm_datasets.conversation_dataset import VLMConversationDataset
 from megatron.bridge.data.vlm_datasets.hf_dataset_makers import (
     make_cord_v2_dataset,
+    make_cord_v2_mocked_pack_dataset,
     make_cv17_dataset,
     make_llava_video_178k_dataset,
     make_medpix_dataset,
@@ -70,6 +71,9 @@ class HFDatasetConversationProvider(DatasetProvider):
     # Enable batch-level online sequence packing (dataset-level packing is available in FinetuneDatasetProvider)
     pack_sequences_in_batch: bool = False
 
+    # Whether the maker returns pre-packed examples (list of conversations) instead of single conversations
+    packed_example: bool = False
+
     def _get_maker(self) -> Callable[..., List[Dict[str, Any]]]:
         registry: Dict[str, Callable[..., List[Dict[str, Any]]]] = {
             "make_rdr_dataset": make_rdr_dataset,
@@ -78,6 +82,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             "make_cv17_dataset": make_cv17_dataset,
             "make_raven_dataset": make_raven_dataset,
             "make_llava_video_178k_dataset": make_llava_video_178k_dataset,
+            "make_cord_v2_mocked_pack_dataset": make_cord_v2_mocked_pack_dataset,
         }
         if self.maker_name in registry:
             return registry[self.maker_name]
@@ -89,6 +94,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             "cv17": "make_cv17_dataset",
             "raven": "make_raven_dataset",
             "llava_video_178k": "make_llava_video_178k_dataset",
+            "cord_v2_mocked_pack": "make_cord_v2_mocked_pack_dataset",
         }
         if self.maker_name in alias_map and alias_map[self.maker_name] in registry:
             return registry[alias_map[self.maker_name]]
