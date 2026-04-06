@@ -516,6 +516,7 @@ def _peft_common_vlm() -> ConfigContainer:
         pin_memory=True,
         persistent_workers=False,
         pack_sequences_in_batch=True,
+        packed_example=False,
     )
 
     # VLM uses NullTokenizer - actual tokenization is handled by the processor

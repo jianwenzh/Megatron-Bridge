@@ -153,6 +153,8 @@ def phi4_mm_collate_fn(examples, processor):
             del batch[key]
     return batch
 
+def _get_messages(example):
+    return example.get('messages', None) or example.get('conversation')
 
 def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
     """Collate function for Qwen2.5 VL model."""
@@ -160,6 +162,12 @@ def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
         raise ImportError(MISSING_QWEN_VL_UTILS_MSG)
 
     skipped_tokens = extract_skipped_token_ids(processor)
+    # two cases:
+    # 1. normal batch of examples
+    # 2. batch size=1 with packed examples
+    if len(examples) == 1 and isinstance(examples[0], list):
+        # Batch size=1, with packed multiple examples
+        examples = examples[0]
 
     texts = [processor.apply_chat_template(example["conversation"], tokenize=False) for example in examples]
     # Build per-example images (list) and split by presence
