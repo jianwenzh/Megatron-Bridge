@@ -56,7 +56,7 @@ class HFDatasetConversationProvider(DatasetProvider):
     # like `make_rdr_dataset`, `make_cord_v2_dataset`, `make_medpix_dataset`, `make_cv17_dataset`.
     maker_name: str
 
-    # Optional parameters forwarded to the selected maker
+    # Optional parameters forwarded to the selected maker, in hydra flow-yaml format, e.g., '{path_or_dataset:"/path/to/local/dataset"}'
     maker_kwargs: Optional[Dict[str, Any]] = None
 
     # Optional collate override. If None, inferred from processor type.
