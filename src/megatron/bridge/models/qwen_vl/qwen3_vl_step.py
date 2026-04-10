@@ -370,6 +370,7 @@ def forward_step(
             assert config.overlap_moe_expert_parallel_comm, (
                 "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
             )
+            # TODO: Here PP suppose broken on packing path, tokens, position_ids, attention_mask are not at the good shape.
             schedule_plan = model.build_schedule_plan(
                 tokens, position_ids, attention_mask, labels=labels, loss_mask=loss_mask
             )
