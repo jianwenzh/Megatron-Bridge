@@ -168,7 +168,8 @@ def pad_or_truncate_2d_attn_mask_to_len(mask: torch.Tensor | None, target_len: i
         return mask[:, :max_cap]
     return mask 
 
-def pack_or_pad_batch_sequences(
+
+def pad_batch_sequences(
     tokens: torch.Tensor,
     labels: torch.Tensor,
     loss_mask: torch.Tensor,
@@ -178,64 +179,79 @@ def pack_or_pad_batch_sequences(
     use_fp8_padding: bool = False,
     force_to_pad_to_seq_len: bool = False,
     seq_length: int = None,
-    pack_sequences_in_batch: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, PackedSeqParams]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Pad or truncate the batch sequences to the target length, and build packed sequences.
-    If is_qwen3vl, return bshd tokens for be compatible with qwen3vl model.
-    Otherwise, return thd tokens and packed sequences.
+    Pad or truncate the batch sequences to the target length.
+    Return bshd tokens for be compatible with qwen3vl model.
     """
 
-    batch_size, cur_len = tokens.shape
-    device = tokens.device
+    cur_len = tokens.shape[1]
 
     tp_size = this_pg_collection.tp.size()
     cp_size = this_pg_collection.cp.size()
     divisible_by = tp_size * cp_size * 2 if cp_size > 1 else tp_size
     divisible_by = math.lcm(divisible_by, 16) if use_fp8_padding else divisible_by
 
-    packed_seq_params = None
-    # for normal non-packing path, no change to existing logic: this place need handle cp compatiable padding before going to QWen3VLModel.forward
-    if not pack_sequences_in_batch:
-        # build bshd sequences with tiny padding to be compatible with qwen3vl model
-        target_len = math.ceil(cur_len / divisible_by) * divisible_by
-        if force_to_pad_to_seq_len:
-            target_len = seq_length
-        tokens = pad_or_truncate_2d_to_len(tokens, target_len=target_len, max_cap=target_len, pad_value=0)
-        labels = pad_or_truncate_2d_to_len(labels, target_len=target_len, max_cap=target_len, pad_value=-100)
-        loss_mask = pad_or_truncate_2d_to_len(loss_mask, target_len=target_len, max_cap=target_len, pad_value=0)
-        attention_mask = pad_or_truncate_attn_to_len(attention_mask, target_len=target_len, max_cap=target_len)
-        position_ids = pad_or_truncate_pos_to_len(position_ids, target_len=target_len, max_cap=target_len)
-    else:
-        # for packing path, we need to calculate the actual seq lengths info. For input data, no need padding, QWen3VLModel.forward will handle that and convert to thd format
-        # Be aware: we skipped truncating as well, be sure you know the length of your dataset
-        
-        # Need original attention_mask to calculate the actual seq lengths before packing
-        # QWen3VLModel.forward will repeatedly use this info when calling preprocess_packed_seqs
-        # NOTE: This block of code calculating cu seqlens info is consistent with that in preprocess_packed_seqs of modeling_qwen3_vl/utils.py, which is called by QWen3VLModel.forward
-        # Ideally, we should avoid two places of calling the same function and leave all into QWen3VLModel.forward, but to keep change minimal, we keep the current structure of calculating cu seqlens info in both places
-        if attention_mask is None:
-            raise ValueError("attention_mask is required when pack_sequences_in_batch is True, but we got None from dataset")
-        seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
-        pad_size = (divisible_by - seqlens_in_batch % divisible_by) % divisible_by
-        seqlens_in_batch_padded = seqlens_in_batch + pad_size
+    # build bshd sequences with tiny padding to be compatible with qwen3vl model
+    target_len = math.ceil(cur_len / divisible_by) * divisible_by
+    if force_to_pad_to_seq_len:
+        target_len = seq_length
+    tokens = pad_or_truncate_2d_to_len(tokens, target_len=target_len, max_cap=target_len, pad_value=0)
+    labels = pad_or_truncate_2d_to_len(labels, target_len=target_len, max_cap=target_len, pad_value=-100)
+    loss_mask = pad_or_truncate_2d_to_len(loss_mask, target_len=target_len, max_cap=target_len, pad_value=0)
+    attention_mask = pad_or_truncate_attn_to_len(attention_mask, target_len=target_len, max_cap=target_len)
+    position_ids = pad_or_truncate_pos_to_len(position_ids, target_len=target_len, max_cap=target_len)
 
-        cu_seqlens_padded = torch.zeros(batch_size + 1, dtype=torch.int32, device=device)
-        cu_seqlens_padded[1:] = torch.cumsum(seqlens_in_batch_padded, dim=0)
-        max_seqlen_in_batch_padded = seqlens_in_batch_padded.max().item() # NOTE: here should use _padded
+    return tokens, labels, loss_mask, attention_mask, position_ids
 
-        # NOTE: all lens should be based on _padded
-        packed_seq_params = PackedSeqParams(
-            qkv_format="thd",
-            cu_seqlens_q=cu_seqlens_padded,
-            max_seqlen_q=max_seqlen_in_batch_padded,
-            cu_seqlens_kv=cu_seqlens_padded,
-            max_seqlen_kv=max_seqlen_in_batch_padded,
-            cu_seqlens_q_padded=cu_seqlens_padded,
-            cu_seqlens_kv_padded=cu_seqlens_padded,
-        )
 
-    return tokens, labels, loss_mask, attention_mask, position_ids, packed_seq_params
+def build_packed_seq_params(
+    tokens: torch.Tensor,
+    attention_mask: torch.Tensor,
+    pg_collection,
+    use_fp8_padding: bool = False,
+) -> PackedSeqParams:
+    """
+    Build packed_seq_params for pack_sequences_in_batch
+    """
+
+    batch_size = tokens.shape[0]
+    device = tokens.device
+
+    tp_size = pg_collection.tp.size()
+    cp_size = pg_collection.cp.size()
+    divisible_by = tp_size * cp_size * 2 if cp_size > 1 else tp_size
+    divisible_by = math.lcm(divisible_by, 16) if use_fp8_padding else divisible_by
+
+    # for packing path, we need to calculate the actual seq lengths info. For input data, no need padding, QWen3VLModel.forward will handle that and convert to thd format
+    # Be aware: we skipped truncating as well, be sure you know the length of your dataset
+    
+    # Need original attention_mask to calculate the actual seq lengths before packing
+    # QWen3VLModel.forward will repeatedly use this info when calling preprocess_packed_seqs
+    # This block of code calculating cu seqlens info is consistent with that in preprocess_packed_seqs of modeling_qwen3_vl/utils.py, which is called by QWen3VLModel.forward
+    # Ideally, we should avoid two places of calling the same function and leave all into QWen3VLModel.forward, but to keep change minimal, we keep the current structure of calculating cu seqlens info in both places
+    if attention_mask is None:
+        raise ValueError("attention_mask is required when pack_sequences_in_batch is True, but we got None")
+    seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
+    pad_size = (divisible_by - seqlens_in_batch % divisible_by) % divisible_by
+    seqlens_in_batch_padded = seqlens_in_batch + pad_size
+
+    cu_seqlens_padded = torch.zeros(batch_size + 1, dtype=torch.int32, device=device)
+    cu_seqlens_padded[1:] = torch.cumsum(seqlens_in_batch_padded, dim=0)
+    max_seqlen_in_batch_padded = seqlens_in_batch_padded.max().item() # NOTE: here should use _padded
+
+    # all lens should be based on _padded
+    packed_seq_params = PackedSeqParams(
+        qkv_format="thd",
+        cu_seqlens_q=cu_seqlens_padded,
+        max_seqlen_q=max_seqlen_in_batch_padded,
+        cu_seqlens_kv=cu_seqlens_padded,
+        max_seqlen_kv=max_seqlen_in_batch_padded,
+        cu_seqlens_q_padded=cu_seqlens_padded,
+        cu_seqlens_kv_padded=cu_seqlens_padded,
+    )
+
+    return packed_seq_params
 
 
 def recover_2d_attention_mask_from_input_ids(input_ids: torch.Tensor, pad_token_id: int) -> torch.Tensor:
@@ -247,6 +263,7 @@ def recover_2d_attention_mask_from_input_ids(input_ids: torch.Tensor, pad_token_
 
     position_ids = torch.arange(input_ids.shape[1], device=input_ids.device)
     return position_ids.unsqueeze(0) < lengths.unsqueeze(1)
+
 
 def forward_step(
     state: GlobalState,
@@ -292,23 +309,18 @@ def forward_step(
     pack_sequences_in_batch = getattr(state.cfg.dataset, "pack_sequences_in_batch", False)
 
     use_fp8_padding = True
-    if pack_sequences_in_batch:
-        # find the last non-padding token index for each sequence in the batch to get accurate attention mask when pack_sequences_in_batch is True
-        attention_mask = recover_2d_attention_mask_from_input_ids(tokens, pad_token_id=_QWEN3_VL_PAD_TOKEN_ID)
-
-    tokens, labels, loss_mask, attention_mask, position_ids, packed_seq_params = pack_or_pad_batch_sequences(
-        tokens,
-        labels,
-        loss_mask,
-        attention_mask,
-        position_ids,
-        this_pg_collection,
-        use_fp8_padding=use_fp8_padding,
-        force_to_pad_to_seq_len=this_pg_collection.pp.size() > 1,
-        seq_length=config.seq_length,
-        pack_sequences_in_batch=pack_sequences_in_batch,
-    )
-    if not pack_sequences_in_batch: 
+    if not pack_sequences_in_batch:
+        tokens, labels, loss_mask, attention_mask, position_ids = pad_batch_sequences(
+            tokens,
+            labels,
+            loss_mask,
+            attention_mask,
+            position_ids,
+            this_pg_collection,
+            use_fp8_padding=use_fp8_padding,
+            force_to_pad_to_seq_len=this_pg_collection.pp.size() > 1,
+            seq_length=config.seq_length
+        )
         # normal path: 
         # - labbels, loss_mask and attention_mask (actually None) go through cp slice
         # - input_ids set as original tokens
@@ -333,6 +345,11 @@ def forward_step(
         # - attention mask: passed in forward args for later calculating cu seqlens info in QWen3VLModel.forward
         # - position_ids set as None and calculate in QWen3VLModel.forward
         # - later attention_mask set as None in loss / scheduler
+        
+        # find the last non-padding token index for each sequence in the batch to get accurate attention mask when pack_sequences_in_batch is True
+        attention_mask = recover_2d_attention_mask_from_input_ids(input_ids=tokens, pad_token_id=_QWEN3_VL_PAD_TOKEN_ID)
+        packed_seq_params = build_packed_seq_params(tokens=tokens, attention_mask=attention_mask, pg_collection=this_pg_collection, use_fp8_padding=use_fp8_padding)
+        
         packed_sliced_labels = None
         if labels is not None:
             packed_sliced_labels, _ = preprocess_packed_seqs(input_ids=labels, attention_mask=attention_mask, pre_process=True, pg_collection=this_pg_collection, use_fp8_padding=use_fp8_padding)
