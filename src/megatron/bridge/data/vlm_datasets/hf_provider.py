@@ -74,6 +74,8 @@ class HFDatasetConversationProvider(DatasetProvider):
     # Whether the maker returns pre-packed examples (list of conversations) instead of single conversations
     packed_example: bool = False
 
+    splits: str = "train,validation,test"
+
     def _get_maker(self) -> Callable[..., List[Dict[str, Any]]]:
         registry: Dict[str, Callable[..., List[Dict[str, Any]]]] = {
             "make_rdr_dataset": make_rdr_dataset,
@@ -131,8 +133,9 @@ class HFDatasetConversationProvider(DatasetProvider):
             ),
         )
 
-        train_ds = self._build_split_dataset("train", context.train_samples, processor)
-        valid_ds = self._build_split_dataset("validation", context.valid_samples, processor)
-        test_ds = self._build_split_dataset("test", context.test_samples, processor)
+        splits = [s.strip() for s in self.splits.split(",")]
+        train_ds = self._build_split_dataset("train", context.train_samples, processor) if "train" in splits else None
+        valid_ds = self._build_split_dataset("validation", context.valid_samples, processor) if "validation" in splits else None
+        test_ds = self._build_split_dataset("test", context.test_samples, processor) if "test" in splits else None
 
         return train_ds, valid_ds, test_ds
