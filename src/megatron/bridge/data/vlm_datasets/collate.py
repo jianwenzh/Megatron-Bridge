@@ -111,7 +111,7 @@ def create_multiturn_loss_mask_by_search(
     return mask
 
 
-def phi4_mm_collate_fn(examples, processor, **kwargs):
+def phi4_mm_collate_fn(examples, processor):
     """Collate function for Phi-4 MM model audio input"""
 
     # Extract conversations and audio data
@@ -183,13 +183,14 @@ def qwen2_5_collate_fn(examples: list, processor, **kwargs) -> dict[str, torch.T
     if idx_with:
         texts_with = [texts[i] for i in idx_with]
         images_with = [per_example_images[i] for i in idx_with]
+        proc_kwargs = {'min_pixels': kwargs.get("min_pixels", None), 'max_pixels': kwargs.get("max_pixels", None)}
+        proc_kwargs = {k: v for k, v in proc_kwargs.items() if v is not None}  # remove None values
         batch_with = processor(
             text=texts_with,
             images=images_with,
             padding=True,
             return_tensors="pt",
-            min_pixels=kwargs.get("min_pixels", 200704),  # 256*28*28
-            max_pixels=kwargs.get("max_pixels", 1003520),  # 1280*28*28? Qwen3-VL patch is 32x32!
+            **proc_kwargs,
         )
 
         batch_with = {k: v.contiguous() if isinstance(v, torch.Tensor) else v for k, v in batch_with.items()}
@@ -277,7 +278,7 @@ def qwen2_5_collate_fn(examples: list, processor, **kwargs) -> dict[str, torch.T
     return batch
 
 
-def nemotron_nano_v2_vl_collate_fn(examples: list, processor, start_of_response_token=None, **kwargs) -> dict[str, torch.Tensor]:
+def nemotron_nano_v2_vl_collate_fn(examples: list, processor, start_of_response_token=None) -> dict[str, torch.Tensor]:
     """Collate function for Nemotron Nano V2 VL model."""
     from megatron.bridge.models.nemotron_vl.nemotron_vl_utils import adjust_image_tokens
 
@@ -373,7 +374,7 @@ def nemotron_nano_v2_vl_collate_fn(examples: list, processor, start_of_response_
     return batch
 
 
-def ministral3_collate_fn(examples: list, processor, **kwargs) -> dict[str, torch.Tensor]:
+def ministral3_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
     """Collate function for Ministral 3 VL model."""
     skipped_tokens = extract_skipped_token_ids(processor)
 
@@ -467,7 +468,7 @@ def ministral3_collate_fn(examples: list, processor, **kwargs) -> dict[str, torc
     return batch
 
 
-def default_collate_fn(examples: list, processor, **kwargs) -> dict[str, torch.Tensor]:
+def default_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
     """Default collate function for VLM models."""
     if not HAVE_QWEN_VL_UTILS:
         raise ImportError(MISSING_QWEN_VL_UTILS_MSG)
