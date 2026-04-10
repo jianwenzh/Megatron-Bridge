@@ -15,8 +15,8 @@
 
 from dataclasses import dataclass
 from typing import Optional, Union
-
 import torch
+import math
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.process_groups_config import ProcessGroupCollection
@@ -659,6 +659,7 @@ def preprocess_packed_seqs(
     attention_mask: torch.Tensor,
     pre_process: bool = True,
     pg_collection: Optional[ProcessGroupCollection] = None,
+    use_fp8_padding: bool = False,
 ) -> tuple[torch.Tensor, PackedSeqParams]:
     """
     Preprocess packed sequences
@@ -678,6 +679,7 @@ def preprocess_packed_seqs(
         cp_size = mpu.get_context_parallel_world_size()
         cp_rank = mpu.get_context_parallel_rank()
     align_size = tp_size * cp_size * 2 if cp_size > 1 else tp_size
+    align_size = math.lcm(align_size, 16) if use_fp8_padding else align_size
 
     pad_size = (align_size - seqlens_in_batch % align_size) % align_size
     seqlens_in_batch_padded = seqlens_in_batch + pad_size

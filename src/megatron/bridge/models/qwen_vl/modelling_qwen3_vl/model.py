@@ -304,6 +304,8 @@ class Qwen3VLModel(MegatronModule):
         vision_mask = None
         deepstack_feature_lists = None
 
+        use_fp8_padding = kwargs.pop("use_fp8_padding", False)
+
         # position ids is computed within the model
         position_ids = None
 
@@ -402,7 +404,7 @@ class Qwen3VLModel(MegatronModule):
                 if attention_mask is None:
                     attention_mask = torch.ones_like(input_ids, dtype=torch.int32, device=input_ids.device)
                 input_ids_thd, _ = preprocess_packed_seqs(
-                    input_ids, attention_mask, pre_process=True, pg_collection=self.pg_collection
+                    input_ids, attention_mask, pre_process=True, pg_collection=self.pg_collection, use_fp8_padding=use_fp8_padding
                 )
                 lm_input_ids = input_ids_thd
                 _, _, vision_mask_thd = reorganize_inputs(
@@ -428,6 +430,7 @@ class Qwen3VLModel(MegatronModule):
                             attention_mask,
                             pre_process=True,
                             pg_collection=self.pg_collection,
+                            use_fp8_padding=use_fp8_padding
                         )[0]
                         new_deepstack_feature_lists.append(tmp_embeddings_thd[vision_mask_thd].contiguous())
 
@@ -440,6 +443,7 @@ class Qwen3VLModel(MegatronModule):
                         attention_mask,
                         pre_process=True,
                         pg_collection=self.pg_collection,
+                        use_fp8_padding=use_fp8_padding
                     )[0]
                     .transpose(0, 1)
                     .contiguous()
@@ -458,7 +462,7 @@ class Qwen3VLModel(MegatronModule):
                 if attention_mask is None:
                     attention_mask = torch.ones_like(input_ids, dtype=torch.int32, device=input_ids.device)
                 lm_input_ids, _ = preprocess_packed_seqs(
-                    input_ids, attention_mask, pre_process=True, pg_collection=self.pg_collection
+                    input_ids, attention_mask, pre_process=True, pg_collection=self.pg_collection, use_fp8_padding=use_fp8_padding
                 )
 
         visual_pos_masks = vision_mask
@@ -508,6 +512,7 @@ class Qwen3VLModel(MegatronModule):
                         attention_mask,
                         pre_process=True,
                         pg_collection=self.pg_collection,
+                        use_fp8_padding=use_fp8_padding,
                     )[0]
                     .permute(2, 0, 1)
                     .contiguous()
