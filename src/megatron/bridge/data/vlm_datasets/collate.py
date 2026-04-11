@@ -153,9 +153,6 @@ def phi4_mm_collate_fn(examples, processor):
             del batch[key]
     return batch
 
-def _get_messages(example):
-    return example.get('messages', None) or example.get('conversation')
-
 def qwen2_5_collate_fn(examples: list, processor, **kwargs) -> dict[str, torch.Tensor]:
     """Collate function for Qwen2.5 VL model."""
     if not HAVE_QWEN_VL_UTILS:
@@ -169,12 +166,12 @@ def qwen2_5_collate_fn(examples: list, processor, **kwargs) -> dict[str, torch.T
         # Batch size=1, with packed multiple examples
         examples = examples[0]
 
-    texts = [processor.apply_chat_template(_get_messages(example), tokenize=False) for example in examples]
+    texts = [processor.apply_chat_template(example['conversation'], tokenize=False) for example in examples]
     # Build per-example images (list) and split by presence
     per_example_images = []
     has_images = []
     for example in examples:
-        imgs = process_vision_info(_get_messages(example))[0]
+        imgs = process_vision_info(example['conversation'])[0]
         if imgs is None:
             imgs = []
         elif not isinstance(imgs, list):

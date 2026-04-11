@@ -22,6 +22,7 @@ import zipfile
 
 import torch
 from PIL import Image
+import copy
 
 from megatron.bridge.data.vlm_datasets.collate import COLLATE_FNS
 
@@ -40,7 +41,7 @@ class VLMConversationDataset(torch.utils.data.Dataset):
 
     def __init__(
         self,
-        base_examples: List[Dict[str, Any]],
+        base_examples: List[Dict[str, Any]]|List[List[Dict[str, Any]]], # support both unpacked and packed examples (list of examples or list of list of examples)
         target_length: int,
         processor: Any,
         collate_impl: Optional[Callable[[list, Any], Dict[str, torch.Tensor]]] = None,
@@ -69,10 +70,21 @@ class VLMConversationDataset(torch.utils.data.Dataset):
         if self._length == 0:
             raise IndexError("Empty dataset")
         base = self._base_examples[idx % len(self._base_examples)]
-        image_zip_path = base.get('image_zip_path', None)
-        if image_zip_path:
-            self._load_images_from_zip(base)
-        return base
+        if isinstance(base, list): # packed_example
+            loaded_examples = []
+            for example in base:
+                image_zip_path = example.get('image_zip_path', None)
+                if image_zip_path:
+                    example = copy.deepcopy(example) # avoid modifying the original example in self._base_examples since it may be shared across multiple indexes
+                    self._load_images_from_zip(example)
+                loaded_examples.append(example)
+            return loaded_examples
+        else: # single example
+            image_zip_path = base.get('image_zip_path', None)
+            if image_zip_path:
+                base = copy.deepcopy(base) # avoid modifying the original example in self._base_examples since it may be shared across multiple indexes
+                self._load_images_from_zip(base)
+            return base
 
     def _load_images_from_zip(self, example: Dict[str, Any]):
         image_zip_path = example['image_zip_path']
@@ -82,7 +94,7 @@ class VLMConversationDataset(torch.utils.data.Dataset):
             self.image_zip_files_map[image_zip_path] = zipfile.ZipFile(image_zip_path, 'r')
         zip_file = self.image_zip_files_map[image_zip_path]
         # load image for each image item
-        messages = example['messages']
+        messages = example['conversation']
         for message in messages:
             for item in message['content']:
                 item_type = item['type']

@@ -81,7 +81,7 @@ class HFDatasetConversationProvider(DatasetProvider):
     # Enable batch-level online sequence packing (dataset-level packing is available in FinetuneDatasetProvider)
     pack_sequences_in_batch: bool = False
 
-    # Whether the maker returns pre-packed examples (list of conversations) instead of single conversations
+    # Whether the maker returns pre-packed examples (each example is a list of examples) instead of single example
     packed_example: bool = False
 
     splits: str = "train,validation,test"

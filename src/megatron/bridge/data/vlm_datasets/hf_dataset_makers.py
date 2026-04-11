@@ -341,22 +341,38 @@ def make_jsonl_zip_chatml_dataset(
     annotation_path: str, 
     image_zip_path: str,
     sampling_rate: float=1.0,
+    head_n: int=None, # for determinstic selection like from dev/test sets or debug, note this is for every individual file before mixing, not for the final mixed dataset
 ) -> List[Dict[str, Any]]:
     """A simple maker that assumes the dataset is already in the expected ChatML format."""
+    if head_n is not None and head_n > 0 and sampling_rate is not None and 0 < sampling_rate < 1.0:
+        raise ValueError("Cannot specify both head_n and sampling_rate for make_jsonl_zip_chatml_dataset, please choose one or the other for deterministic selection.")
+    
     examples = []
     with open(annotation_path, "r", encoding="utf-8") as f:
         for line in f:
             try:
                 example = json.loads(line)
-                example['image_zip_path'] = image_zip_path
+                ind_examples = example if isinstance(example, list) else [example]
+                for e in ind_examples:
+                    e['image_zip_path'] = image_zip_path
+                    if 'conversation' not in e and 'messages' in e:
+                        e['conversation'] = e.pop('messages')
+
+                    if 'conversation' not in e:
+                        raise ValueError(f"Example does not contain 'conversation' or 'messages' field: {e}")
+                
                 examples.append(example)
             except json.JSONDecodeError:
                 raise ValueError(f"Invalid JSON line in dataset: {line.strip()}")
 
-    if sampling_rate is not None and 0 < sampling_rate < 1.0:
+            if head_n is not None and head_n > 0 and len(examples) >= head_n:
+                break
+
+    if head_n is None and sampling_rate is not None and 0 < sampling_rate < 1.0:
         sample_size = int(len(examples) * sampling_rate)
         random.shuffle(examples)
         examples = examples[:sample_size]
+    
     return examples
 
 # jsonl-zip dataset mix
@@ -365,6 +381,7 @@ def make_zipmix_dataset(
     annotation_path: str=None,
     image_zip_path: str=None,
     sampling_rate: float=None,
+    head_n: int=None,
     split: str='train',
     **kwargs
 ) -> List[Dict[str, Any]]:
@@ -384,7 +401,7 @@ def make_zipmix_dataset(
     examples = []
     if dataset_items is not None:
         for item in dataset_items:
-            item_examples = make_jsonl_zip_chatml_dataset(annotation_path=item.annotation_path, image_zip_path=item.image_zip_path, sampling_rate=item.sampling_rate)
+            item_examples = make_jsonl_zip_chatml_dataset(annotation_path=item.annotation_path, image_zip_path=item.image_zip_path, sampling_rate=item.sampling_rate, head_n=item.head_n)
             examples.extend(item_examples)
     return examples
 
@@ -394,10 +411,17 @@ class DatasetItem:
     annotation_path: str
     image_zip_path: str
     sampling_rate: float
+    head_n: int = None
 
     def __post_init__(self):
         if self.sampling_rate is not None and (self.sampling_rate < 0 or self.sampling_rate > 1):
             raise ValueError(f"sampling_rate must be between 0 and 1!")
+
+        if self.head_n is not None and self.head_n <= 0:
+            raise ValueError(f"head_n must be a positive integer!")
+
+        if self.sampling_rate is not None and 0 < self.sampling_rate < 1 and self.head_n is not None:
+            raise ValueError(f"Cannot specify both head_n and sampling_rate for DatasetItem, please choose one or the other for deterministic selection.")
 
 
 def glob_files_via_path_regex(dir: str, path_regex: str) -> List[str]:
@@ -419,11 +443,19 @@ class DatasetConfig:
     annotations_path: str
     images_path: str # if zip_path, we assume all annotations share the same single zip file; otherwise, we assume annotations_dir and iamges_dir have the same structure and share the same path regex
     path_regex: str # if images_dir_or_zip_path is a zip file path, this regex only applies to annotation files; otherwise, it applies to both annotation and image files to find the corresponding pairs
-    sampling_rate: float
+    sampling_rate: float = 1.0
+    head_n: int = None # for determinstic selection like from dev/test sets or debug, note this is for every individual file before mixing, not for the final mixed dataset
 
     def __post_init__(self):
         if self.sampling_rate is not None and (self.sampling_rate < 0 or self.sampling_rate > 1):
             raise ValueError(f"sampling_rate must be between 0 and 1!")
+
+        if self.head_n is not None and self.head_n <= 0:
+            raise ValueError(f"head_n must be a positive integer!")
+
+        if self.sampling_rate is not None and 0 < self.sampling_rate < 1 and self.head_n is not None:
+            raise ValueError(f"Cannot specify both head_n and sampling_rate for DatasetConfig, please choose one or the other for deterministic selection!")
+        
         if not (
             (Path(self.annotations_path).is_dir() and Path(self.images_path).is_dir() and self.path_regex)
             or (Path(self.annotations_path).is_dir() and self.images_path.endswith(".zip"))
@@ -449,7 +481,7 @@ class DatasetConfig:
                 if not image_path.is_file():
                     raise ValueError(f"Image file {image_path} not found for annotation {annotation_path}!")
                 
-                dataset_items.append(DatasetItem(annotation_path=str(annotation_path), image_zip_path=str(image_path), sampling_rate=self.sampling_rate))
+                dataset_items.append(DatasetItem(annotation_path=str(annotation_path), image_zip_path=str(image_path), sampling_rate=self.sampling_rate, head_n=self.head_n))
             
             return dataset_items
         # Case 2
@@ -459,7 +491,7 @@ class DatasetConfig:
             for annotation_path in annotation_paths:
                 if not Path(annotation_path).is_file():
                     raise ValueError(f"Annotation path {annotation_path} is not a file!")
-                dataset_items.append(DatasetItem(annotation_path=str(annotation_path), image_zip_path=self.images_path, sampling_rate=self.sampling_rate))
+                dataset_items.append(DatasetItem(annotation_path=str(annotation_path), image_zip_path=self.images_path, sampling_rate=self.sampling_rate, head_n=self.head_n))
             return dataset_items
         # Case 3
         elif self.annotations_path.endswith(".jsonl") and self.images_path.endswith(".zip"):
@@ -467,7 +499,7 @@ class DatasetConfig:
                 raise ValueError(f"Annotation path {self.annotations_path} is not a file!")
             if not Path(self.images_path).is_file():
                 raise ValueError(f"Image zip path {self.images_path} is not a file!")
-            return [DatasetItem(annotation_path=self.annotations_path, image_zip_path=self.images_path, sampling_rate=self.sampling_rate)]
+            return [DatasetItem(annotation_path=self.annotations_path, image_zip_path=self.images_path, sampling_rate=self.sampling_rate, head_n=self.head_n)]
         else:
             raise ValueError(f"Invalid DatasetConfig: annotations_path='{self.annotations_path}', images_path='{self.images_path}'.\n")
 
