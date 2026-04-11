@@ -126,6 +126,11 @@ from megatron.bridge.training.pretrain import pretrain
 from megatron.bridge.training.utils.omegaconf_utils import process_config_with_overrides
 from megatron.bridge.training.vlm_step import forward_step as vlm_forward_step
 
+from megatron.core.transformer.enums import AttnBackend
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 STEP_FUNCTIONS: dict[str, Callable] = {
     "gpt_step": gpt_forward_step,
@@ -306,6 +311,16 @@ def infer_train_mode(recipe_name: str) -> str:
     raise ValueError(ERR_INFER_MODE_FAILED)
 
 
+def config_post_process(config: ConfigContainer):
+    # handle config.model.attention_backend string -> enum conversion
+    if isinstance(config.model.attention_backend, str):
+        config.model.attention_backend = AttnBackend[config.model.attention_backend]
+    elif isinstance(config.model.attention_backend, int):
+        config.model.attention_backend = AttnBackend(config.model.attention_backend)
+
+    if not isinstance(config.model.attention_backend, AttnBackend):
+        raise ValueError(f"Invalid attention_backend: {config.model.attention_backend}")
+
 def main() -> None:
     """Run GPT training (pretrain or finetune)."""
     args, cli_overrides = parse_args()
@@ -335,6 +350,8 @@ def main() -> None:
         cli_overrides=cli_overrides or None,
     )
 
+    config_post_process(config)
+    
     # Ensure dataset.seq_length and model.seq_length stay in sync after CLI overrides
     if (
         hasattr(config, "model")
@@ -344,6 +361,10 @@ def main() -> None:
     ):
         if hasattr(config.dataset, "seq_length") and config.model.seq_length != config.dataset.seq_length:
             config.model.seq_length = config.dataset.seq_length
+
+    logger.info(f"==================================== full config =============================================")
+    logger.info(config)
+    logger.info(f"==============================================================================================")
 
     forward_step = load_forward_step(args.step_func, mode=mode)
     train_func = TRAIN_FUNCTIONS[mode]
