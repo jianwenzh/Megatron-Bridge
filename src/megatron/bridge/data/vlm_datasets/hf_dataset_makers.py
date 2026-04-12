@@ -403,6 +403,11 @@ def make_zipmix_dataset(
         for item in dataset_items:
             item_examples = make_jsonl_zip_chatml_dataset(annotation_path=item.annotation_path, image_zip_path=item.image_zip_path, sampling_rate=item.sampling_rate, head_n=item.head_n)
             examples.extend(item_examples)
+
+    # please make sure in the data mix config, the train split uses name 'train'
+    if split == 'train':
+        random.shuffle(examples)
+    
     return examples
 
 
