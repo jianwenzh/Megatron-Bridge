@@ -31,6 +31,7 @@ from megatron.bridge.data.vlm_datasets.hf_dataset_makers import (
     make_medpix_dataset,
     make_raven_dataset,
     make_rdr_dataset,
+    make_zipmix_dataset
 )
 from megatron.bridge.models.hf_pretrained.utils import is_safe_repo
 from megatron.bridge.training.config import DatasetBuildContext, DatasetProvider
@@ -56,11 +57,20 @@ class HFDatasetConversationProvider(DatasetProvider):
     # like `make_rdr_dataset`, `make_cord_v2_dataset`, `make_medpix_dataset`, `make_cv17_dataset`.
     maker_name: str
 
-    # Optional parameters forwarded to the selected maker, in hydra flow-yaml format, e.g., '{path_or_dataset:"/path/to/local/dataset"}'
+    # Optional parameters forwarded to the selected maker
+    # For make_jsonl_zip_chatml_datamix, the maker_kwargs can be:
+    # - datamix_config_path: str (path to datamix config YAML that specifies multiple datasets and sampling rates)
+    # Pass in via cli following hydra-like syntax: e.g., dataset.maker_kwargs='{datamix_config_path:"/path/to/config.yaml"}', note the quotes
+    # For normal existing hf dataset makers, the maker_kwargs can be used to pass in local data path:
+    # - path_or_dataset: str (path to local dataset or HF dataset identifier)
+    # dataset.maker_kwargs='{path_or_dataset:"/path/to/dataset_local_path"}'
     maker_kwargs: Optional[Dict[str, Any]] = None
 
     # Optional collate override. If None, inferred from processor type.
     collate_impl: Optional[Callable[[list, Any], Dict[str, torch.Tensor]]] = None
+    # Optional parameters forwarded to collate function, e.g., for dynamic image resizing in Qwen3-VL, min_pixels and max_pixels via collate_kwargs: 
+    # Pass in via cli hydra-like syntax: e.g., dataset.collate_kwargs='{min_pixels:512, max_pixels:1024}', note the quotes
+    collate_kwargs: Optional[Dict[str, Any]] = None
 
     # Keep parity with GPTDatasetConfig usage in batching utilities
     skip_getting_attention_mask_from_dataset: bool = True
@@ -71,7 +81,7 @@ class HFDatasetConversationProvider(DatasetProvider):
     # Enable batch-level online sequence packing (dataset-level packing is available in FinetuneDatasetProvider)
     pack_sequences_in_batch: bool = False
 
-    # Whether the maker returns pre-packed examples (list of conversations) instead of single conversations
+    # Whether the maker returns pre-packed examples (each example is a list of examples) instead of single example
     packed_example: bool = False
 
     splits: str = "train,validation,test"
@@ -84,6 +94,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             "make_cv17_dataset": make_cv17_dataset,
             "make_raven_dataset": make_raven_dataset,
             "make_llava_video_178k_dataset": make_llava_video_178k_dataset,
+            "make_zipmix_dataset": make_zipmix_dataset,
             "make_cord_v2_mocked_pack_dataset": make_cord_v2_mocked_pack_dataset,
         }
         if self.maker_name in registry:
@@ -96,6 +107,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             "cv17": "make_cv17_dataset",
             "raven": "make_raven_dataset",
             "llava_video_178k": "make_llava_video_178k_dataset",
+            "zipmix": "make_zipmix_dataset",
             "cord_v2_mocked_pack": "make_cord_v2_mocked_pack_dataset",
         }
         if self.maker_name in alias_map and alias_map[self.maker_name] in registry:
@@ -121,6 +133,7 @@ class HFDatasetConversationProvider(DatasetProvider):
             target_length=target_length,
             processor=processor,
             collate_impl=self.collate_impl,
+            **(self.collate_kwargs or {}),
         )
 
     def build_datasets(self, context: DatasetBuildContext) -> Tuple[Optional[Any], Optional[Any], Optional[Any]]:

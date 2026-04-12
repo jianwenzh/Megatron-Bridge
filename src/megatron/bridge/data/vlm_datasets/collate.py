@@ -153,10 +153,7 @@ def phi4_mm_collate_fn(examples, processor):
             del batch[key]
     return batch
 
-def _get_messages(example):
-    return example.get('messages', None) or example.get('conversation')
-
-def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
+def qwen2_5_collate_fn(examples: list, processor, **kwargs) -> dict[str, torch.Tensor]:
     """Collate function for Qwen2.5 VL model."""
     if not HAVE_QWEN_VL_UTILS:
         raise ImportError(MISSING_QWEN_VL_UTILS_MSG)
@@ -169,12 +166,12 @@ def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
         # Batch size=1, with packed multiple examples
         examples = examples[0]
 
-    texts = [processor.apply_chat_template(example["conversation"], tokenize=False) for example in examples]
+    texts = [processor.apply_chat_template(example['conversation'], tokenize=False) for example in examples]
     # Build per-example images (list) and split by presence
     per_example_images = []
     has_images = []
     for example in examples:
-        imgs = process_vision_info(example["conversation"])[0]
+        imgs = process_vision_info(example['conversation'])[0]
         if imgs is None:
             imgs = []
         elif not isinstance(imgs, list):
@@ -191,13 +188,14 @@ def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
     if idx_with:
         texts_with = [texts[i] for i in idx_with]
         images_with = [per_example_images[i] for i in idx_with]
+        proc_kwargs = {'min_pixels': kwargs.get("min_pixels", None), 'max_pixels': kwargs.get("max_pixels", None)}
+        proc_kwargs = {k: v for k, v in proc_kwargs.items() if v is not None}  # remove None values
         batch_with = processor(
             text=texts_with,
             images=images_with,
             padding=True,
             return_tensors="pt",
-            min_pixels=200704,  # 256*28*28
-            max_pixels=1003520,  # 1280*28*28
+            **proc_kwargs,
         )
 
         batch_with = {k: v.contiguous() if isinstance(v, torch.Tensor) else v for k, v in batch_with.items()}

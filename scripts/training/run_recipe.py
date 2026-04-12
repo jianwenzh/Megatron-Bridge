@@ -105,7 +105,8 @@ Recipe Arguments:
 
 import argparse
 import inspect
-from typing import Callable
+from typing import Callable, Dict, Any
+import json
 
 import megatron.bridge.recipes as recipes
 
@@ -126,6 +127,12 @@ from megatron.bridge.training.pretrain import pretrain
 from megatron.bridge.training.utils.omegaconf_utils import process_config_with_overrides
 from megatron.bridge.training.vlm_step import forward_step as vlm_forward_step
 
+from megatron.core.transformer.enums import AttnBackend
+
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 STEP_FUNCTIONS: dict[str, Callable] = {
     "gpt_step": gpt_forward_step,
@@ -212,6 +219,14 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="HuggingFace model ID or local path to model directory. "
         "Use a local path for more stable multinode training.",
     )
+    parser.add_argument(
+        "--peft_kwargs",
+        type=json.loads,
+        default=None,
+        help="PEFT keyword arguments as a JSON string. "
+        "Use this to pass additional parameters to the PEFT configuration. NOTE: so far peft configs are not able to override by cli, so this is the trick to override them",
+    )
+    
     args, cli_overrides = parser.parse_known_args()
     return args, cli_overrides
 
@@ -222,6 +237,7 @@ def load_recipe(
     packed_sequence: bool = False,
     seq_length: int | None = None,
     hf_path: str | None = None,
+    peft_kwargs: Dict[str, Any] | None = None,
 ) -> ConfigContainer:
     """
     Load recipe by name from megatron.bridge.recipes.
@@ -232,7 +248,7 @@ def load_recipe(
         packed_sequence: Enable packed sequence training (default: False)
         seq_length: Sequence length for training (optional)
         hf_path: HuggingFace model ID or local path to model directory (optional)
-
+        peft_kwargs: Additional keyword arguments for PEFT configuration (optional)
     Returns:
         ConfigContainer from calling the recipe
 
@@ -258,12 +274,14 @@ def load_recipe(
         accepts_packed_sequence = "packed_sequence" in params or has_var_keyword
         accepts_seq_length = "seq_length" in params or has_var_keyword
         accepts_hf_path = "hf_path" in params or has_var_keyword
+        accepts_peft_kwargs = "peft_kwargs" in params or has_var_keyword
     except (ValueError, TypeError):
         # If signature inspection fails, fallback conservatively
         accepts_peft = True  # peft is widely supported, try passing it
         accepts_packed_sequence = False  # new parameter, don't pass if unsure
         accepts_seq_length = False  # new parameter, don't pass if unsure
         accepts_hf_path = False  # model-specific, don't pass if unsure
+        accepts_peft_kwargs = False  # new parameter, don't pass if unsure
 
     # Build kwargs dynamically based on what the recipe accepts
     kwargs = {}
@@ -275,6 +293,8 @@ def load_recipe(
         kwargs["seq_length"] = seq_length
     if accepts_hf_path and hf_path is not None:
         kwargs["hf_path"] = hf_path
+    if accepts_peft_kwargs and peft_kwargs is not None:
+        kwargs["peft_kwargs"] = peft_kwargs
 
     try:
         return config_builder(**kwargs)
@@ -306,6 +326,16 @@ def infer_train_mode(recipe_name: str) -> str:
     raise ValueError(ERR_INFER_MODE_FAILED)
 
 
+def config_post_process(config: ConfigContainer):
+    # handle config.model.attention_backend string -> enum conversion
+    if isinstance(config.model.attention_backend, str):
+        config.model.attention_backend = AttnBackend[config.model.attention_backend]
+    elif isinstance(config.model.attention_backend, int):
+        config.model.attention_backend = AttnBackend(config.model.attention_backend)
+
+    if not isinstance(config.model.attention_backend, AttnBackend):
+        raise ValueError(f"Invalid attention_backend: {config.model.attention_backend}")
+
 def main() -> None:
     """Run GPT training (pretrain or finetune)."""
     args, cli_overrides = parse_args()
@@ -316,6 +346,7 @@ def main() -> None:
         args.packed_sequence,
         args.seq_length,
         args.hf_path,
+        args.peft_kwargs,
     )
 
     if args.dataset is not None:
@@ -335,6 +366,8 @@ def main() -> None:
         cli_overrides=cli_overrides or None,
     )
 
+    config_post_process(config)
+    
     # Ensure dataset.seq_length and model.seq_length stay in sync after CLI overrides
     if (
         hasattr(config, "model")
@@ -344,6 +377,10 @@ def main() -> None:
     ):
         if hasattr(config.dataset, "seq_length") and config.model.seq_length != config.dataset.seq_length:
             config.model.seq_length = config.dataset.seq_length
+
+    logger.info(f"==================================== full config =============================================")
+    logger.info(config)
+    logger.info(f"==============================================================================================")
 
     forward_step = load_forward_step(args.step_func, mode=mode)
     train_func = TRAIN_FUNCTIONS[mode]

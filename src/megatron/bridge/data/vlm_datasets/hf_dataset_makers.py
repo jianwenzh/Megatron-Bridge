@@ -17,15 +17,22 @@ Built-in maker functions that transform HuggingFace datasets into
 conversation-style examples consumable by VLM processors.
 """
 
+from dataclasses import dataclass
+import glob
 import json
+import os
 import random
 from pathlib import Path
+import re
 from typing import Any, Dict, List
 
 from datasets import concatenate_datasets, load_dataset
+import yaml
 
 from megatron.bridge.data.vlm_datasets.token_utils import json2token
 from megatron.bridge.utils.common_utils import resolve_path
+
+random.seed(42)
 
 def make_rdr_dataset(
     path_or_dataset: str = "quintend/rdr-items", split: str = "train", **kwargs
@@ -328,3 +335,194 @@ def make_cv17_dataset(
         }
 
     return [format(example) for example in dataset]
+
+# jsonl dataset already in valid chatml format, either HF or OpenAI, no need furthr process, just pass through
+def make_jsonl_zip_chatml_dataset(
+    annotation_path: str, 
+    image_zip_path: str,
+    sampling_rate: float=1.0,
+    head_n: int=None, # for determinstic selection like from dev/test sets or debug, note this is for every individual file before mixing, not for the final mixed dataset
+) -> List[Dict[str, Any]]:
+    """A simple maker that assumes the dataset is already in the expected ChatML format."""
+    if head_n is not None and head_n > 0 and sampling_rate is not None and 0 < sampling_rate < 1.0:
+        raise ValueError("Cannot specify both head_n and sampling_rate for make_jsonl_zip_chatml_dataset, please choose one or the other for deterministic selection.")
+    
+    examples = []
+    with open(annotation_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                example = json.loads(line)
+                ind_examples = example if isinstance(example, list) else [example]
+                for e in ind_examples:
+                    e['image_zip_path'] = image_zip_path
+                    if 'conversation' not in e and 'messages' in e:
+                        e['conversation'] = e.pop('messages')
+
+                    if 'conversation' not in e:
+                        raise ValueError(f"Example does not contain 'conversation' or 'messages' field: {e}")
+                
+                examples.append(example)
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid JSON line in dataset: {line.strip()}")
+
+            if head_n is not None and head_n > 0 and len(examples) >= head_n:
+                break
+
+    if head_n is None and sampling_rate is not None and 0 < sampling_rate < 1.0:
+        sample_size = int(len(examples) * sampling_rate)
+        random.shuffle(examples)
+        examples = examples[:sample_size]
+    
+    return examples
+
+# jsonl-zip dataset mix
+def make_zipmix_dataset(
+    datamix_config_path: str=None, 
+    annotation_path: str=None,
+    image_zip_path: str=None,
+    sampling_rate: float=None,
+    head_n: int=None,
+    split: str='train',
+    **kwargs
+) -> List[Dict[str, Any]]:
+    if datamix_config_path is not None:
+        mix_config = DatasetMixConfig(datamix_config_path)
+        dataset_items = mix_config.get_dataset_items(split=split)
+    
+    else:
+        dataset_items = None
+        if annotation_path is not None and image_zip_path is not None:
+            dataset_items = [
+                DatasetItem(annotation_path=annotation_path, image_zip_path=image_zip_path, sampling_rate=sampling_rate)
+            ]
+        else:
+            raise ValueError("Either datamix_config_path or both annotation_path and image_zip_path must be provided!")
+
+    examples = []
+    if dataset_items is not None:
+        for item in dataset_items:
+            item_examples = make_jsonl_zip_chatml_dataset(annotation_path=item.annotation_path, image_zip_path=item.image_zip_path, sampling_rate=item.sampling_rate, head_n=item.head_n)
+            examples.extend(item_examples)
+
+    # please make sure in the data mix config, the train split uses name 'train'
+    if split == 'train':
+        random.shuffle(examples)
+    
+    return examples
+
+
+@dataclass
+class DatasetItem:
+    annotation_path: str
+    image_zip_path: str
+    sampling_rate: float
+    head_n: int = None
+
+    def __post_init__(self):
+        if self.sampling_rate is not None and (self.sampling_rate < 0 or self.sampling_rate > 1):
+            raise ValueError(f"sampling_rate must be between 0 and 1!")
+
+        if self.head_n is not None and self.head_n <= 0:
+            raise ValueError(f"head_n must be a positive integer!")
+
+        if self.sampling_rate is not None and 0 < self.sampling_rate < 1 and self.head_n is not None:
+            raise ValueError(f"Cannot specify both head_n and sampling_rate for DatasetItem, please choose one or the other for deterministic selection.")
+
+
+def glob_files_via_path_regex(dir: str, path_regex: str) -> List[str]:
+    files = glob.glob(os.path.join(dir, '**/*'), recursive=True)
+    files = [f for f in files if os.path.isfile(f)]
+    # used for post-filtering files based on regex pattern
+    if path_regex is not None:
+        regex = re.compile(path_regex)
+        files = [f for f in files if regex.search(f)]
+    return sorted(files)
+
+@dataclass
+class DatasetConfig:
+    # Three cases:
+    # 1. annotations_path is DIR, images_path is DIR, and path_regex is applied to both to find pairs, assume both DIRs share the same structure except the extension
+    # 2. annotations_path is DIR, images_path is ZIP, and path_regex is applied to annotations_dir to find annotation files, each annotation file corresponds to the same single ZIP file containing all images
+    # 3. annotations_path is JSONL file, images_path is ZIP, and path_regex is not used, each line in the jsonl file contains the annotation info and the corresponding image file name in the ZIP file
+    # Other than that, the config is considered invalid and should raise an error
+    annotations_path: str
+    images_path: str # if zip_path, we assume all annotations share the same single zip file; otherwise, we assume annotations_dir and iamges_dir have the same structure and share the same path regex
+    path_regex: str # if images_dir_or_zip_path is a zip file path, this regex only applies to annotation files; otherwise, it applies to both annotation and image files to find the corresponding pairs
+    sampling_rate: float = 1.0
+    head_n: int = None # for determinstic selection like from dev/test sets or debug, note this is for every individual file before mixing, not for the final mixed dataset
+
+    def __post_init__(self):
+        if self.sampling_rate is not None and (self.sampling_rate < 0 or self.sampling_rate > 1):
+            raise ValueError(f"sampling_rate must be between 0 and 1!")
+
+        if self.head_n is not None and self.head_n <= 0:
+            raise ValueError(f"head_n must be a positive integer!")
+
+        if self.sampling_rate is not None and 0 < self.sampling_rate < 1 and self.head_n is not None:
+            raise ValueError(f"Cannot specify both head_n and sampling_rate for DatasetConfig, please choose one or the other for deterministic selection!")
+        
+        if not (
+            (Path(self.annotations_path).is_dir() and Path(self.images_path).is_dir() and self.path_regex)
+            or (Path(self.annotations_path).is_dir() and self.images_path.endswith(".zip"))
+            or (self.annotations_path.endswith(".jsonl") and self.images_path.endswith(".zip"))
+        ):
+            raise ValueError(
+                f"Invalid DatasetConfig: annotations_path='{self.annotations_path}', images_path='{self.images_path}'.\n"
+                f"Expected one of the following cases:\n"
+        )
+
+    def get_dataset_items(self) -> List[DatasetItem]:
+        # Case 1
+        if Path(self.annotations_path).is_dir() and Path(self.images_path).is_dir() and self.path_regex:
+            # find all annotation files matching the regex
+            annotation_paths = glob_files_via_path_regex(self.annotations_path, self.path_regex)
+            dataset_items = []
+            for annotation_path in annotation_paths:
+                if not Path(annotation_path).is_file():
+                    raise ValueError(f"Annotation path {annotation_path} is not a file!")
+                rel_path = os.path.relpath(annotation_path, self.annotations_path)
+                # assume image relative path only differ in extension i.e., .jsonl to .zip
+                image_path = (Path(self.images_path) / rel_path).with_suffix('.zip')
+                if not image_path.is_file():
+                    raise ValueError(f"Image file {image_path} not found for annotation {annotation_path}!")
+                
+                dataset_items.append(DatasetItem(annotation_path=str(annotation_path), image_zip_path=str(image_path), sampling_rate=self.sampling_rate, head_n=self.head_n))
+            
+            return dataset_items
+        # Case 2
+        elif Path(self.annotations_path).is_dir() and self.images_path.endswith(".zip"):
+            annotation_paths = glob_files_via_path_regex(self.annotations_path, self.path_regex)
+            dataset_items = []
+            for annotation_path in annotation_paths:
+                if not Path(annotation_path).is_file():
+                    raise ValueError(f"Annotation path {annotation_path} is not a file!")
+                dataset_items.append(DatasetItem(annotation_path=str(annotation_path), image_zip_path=self.images_path, sampling_rate=self.sampling_rate, head_n=self.head_n))
+            return dataset_items
+        # Case 3
+        elif self.annotations_path.endswith(".jsonl") and self.images_path.endswith(".zip"):
+            if not Path(self.annotations_path).is_file():
+                raise ValueError(f"Annotation path {self.annotations_path} is not a file!")
+            if not Path(self.images_path).is_file():
+                raise ValueError(f"Image zip path {self.images_path} is not a file!")
+            return [DatasetItem(annotation_path=self.annotations_path, image_zip_path=self.images_path, sampling_rate=self.sampling_rate, head_n=self.head_n)]
+        else:
+            raise ValueError(f"Invalid DatasetConfig: annotations_path='{self.annotations_path}', images_path='{self.images_path}'.\n")
+
+
+class DatasetMixConfig:
+    def __init__(self, config_path: str):
+        # yaml file
+        with open(config_path, "r") as f:
+            config_data = yaml.safe_load(f)
+
+        self.split_configs = {}
+        for split, split_config in config_data.items():
+            self.split_configs[split] = [DatasetConfig(**item) for item in split_config]
+            
+    def get_dataset_items(self, split: str) -> List[DatasetItem]:
+        if split not in self.split_configs:
+            raise ValueError(f"Split '{split}' not found in config!")
+        dataset_items = []
+        for config in self.split_configs[split]:
+            dataset_items.extend(config.get_dataset_items())
+        return dataset_items

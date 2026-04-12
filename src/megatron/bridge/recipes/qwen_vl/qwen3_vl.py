@@ -30,6 +30,7 @@ from megatron.bridge.recipes.utils.optimizer_utils import distributed_fused_adam
 from megatron.bridge.training.config import ConfigContainer
 from megatron.bridge.training.flex_dispatcher_backend import apply_flex_dispatcher_backend
 
+from typing import Dict, Any
 
 def _make_energon_dataset(
     hf_path: str, seq_length: int, micro_batch_size: int, global_batch_size: int
@@ -464,7 +465,7 @@ def qwen3_vl_235b_a22b_sft_config() -> ConfigContainer:
 # =============================================================================
 # Qwen3-VL 8B PEFT Configuration
 # =============================================================================
-def qwen3_vl_8b_peft_config(peft_scheme: str | PEFT = "lora", hf_path: str = "Qwen/Qwen3-VL-8B-Instruct") -> ConfigContainer:
+def qwen3_vl_8b_peft_config(peft_scheme: str | PEFT = "lora", hf_path: str = "Qwen/Qwen3-VL-8B-Instruct", peft_kwargs: Dict[str, Any] = None) -> ConfigContainer:
     """Return a PEFT config for Qwen3-VL 8B (dense model).
 
     Default configuration: 1 node, 8 GPUs
@@ -479,7 +480,7 @@ def qwen3_vl_8b_peft_config(peft_scheme: str | PEFT = "lora", hf_path: str = "Qw
 
     # PEFT scheme
     if isinstance(peft_scheme, str) and peft_scheme.lower() in ["lora", "dora"]:
-        cfg.peft = default_peft_config(peft_scheme)
+        cfg.peft = default_peft_config(peft_scheme, **(peft_kwargs or {}))
     else:
         cfg.peft = peft_scheme
 
